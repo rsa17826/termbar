@@ -26,7 +26,7 @@
             pname = "termbar";
             version = "1";
             src = ./.;
-            vendorHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+            vendorHash = null;
           };
         };
         devShells = {
