@@ -243,8 +243,8 @@ func writeOutput(b []byte, rows int) {
 
 	if hasReset || altExit {
 		setScrollRegion(rows)
-		// drawStatus(rows, getStatus())
 	}
+	// always write to prevent flickering on pressing \n
 	drawStatus(rows, getStatus())
 }
 
