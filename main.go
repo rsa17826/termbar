@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -152,6 +153,67 @@ func drawStatus(rows int, status string) {
 	)
 }
 
+// rewriteDECSTBM rewrites a single DECSTBM parameter string so the bottom
+// margin never reaches our reserved last row.
+func rewriteDECSTBM(params string, rows int) string {
+	top, bottom := 1, rows
+	if params != "" {
+		parts := strings.SplitN(params, ";", 2)
+		if parts[0] != "" {
+			if n, err := strconv.Atoi(parts[0]); err == nil {
+				top = n
+			}
+		}
+		if len(parts) == 2 && parts[1] != "" {
+			if n, err := strconv.Atoi(parts[1]); err == nil {
+				bottom = n
+			}
+		}
+	}
+	if bottom >= rows {
+		bottom = rows - 1
+	}
+	return fmt.Sprintf("%d;%d", top, bottom)
+}
+
+// filterDECSTBM scans b for CSI DECSTBM sequences (\033[...r) and rewrites
+// them so the bottom margin never reaches our reserved last row.
+// This prevents apps (including zsh's SIGWINCH handler) from reclaiming it.
+func filterDECSTBM(b []byte, rows int) []byte {
+	if !bytes.ContainsRune(b, 0x1b) {
+		return b
+	}
+	out := make([]byte, 0, len(b))
+	for i := 0; i < len(b); {
+		if b[i] != 0x1b || i+1 >= len(b) || b[i+1] != '[' {
+			out = append(out, b[i])
+			i++
+			continue
+		}
+		j := i + 2
+		for j < len(b) && (b[j] == ';' || (b[j] >= '0' && b[j] <= '9')) {
+			j++
+		}
+		if j >= len(b) {
+			// Incomplete sequence — pass through.
+			out = append(out, b[i:]...)
+			break
+		}
+		if b[j] == 'r' {
+			params := string(b[i+2 : j])
+			out = append(out, '\033', '[')
+			out = append(out, []byte(rewriteDECSTBM(params, rows))...)
+			out = append(out, 'r')
+			i = j + 1
+			continue
+		}
+		// Other CSI sequence — pass through unchanged.
+		out = append(out, b[i:j+1]...)
+		i = j + 1
+	}
+	return out
+}
+
 // writeOutput forwards PTY bytes to stdout and watches for escape sequences
 // that would break our setup (alt-screen switches, full terminal reset).
 func writeOutput(b []byte, rows int) {
@@ -172,10 +234,13 @@ func writeOutput(b []byte, rows int) {
 		inAltScreen = false
 	}
 
+	// Rewrite DECSTBM sequences so nothing can reclaim our last row.
+	if !inAltScreen {
+		b = filterDECSTBM(b, rows)
+	}
+
 	os.Stdout.Write(b)
 
-	// After a reset or returning from alt-screen: re-assert scroll region
-	// and redraw the status bar.
 	if hasReset || altExit {
 		setScrollRegion(rows)
 		drawStatus(rows, getStatus())
