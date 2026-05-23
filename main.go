@@ -246,7 +246,10 @@ func main() {
 	drawStatus(currentRows, "0s 000ms")
 	mu.Unlock()
 
-	// Forward SIGWINCH to child and update our scroll region.
+	// Forward SIGWINCH to child. We only update the child's reported size and
+	// redraw the status bar — we do NOT re-issue DECSTBM because setting the
+	// scroll region again causes kitty to clear scrollback history.
+	// The child being rows-1 tall is sufficient to keep it out of our last row.
 	winch := make(chan os.Signal, 1)
 	signal.Notify(winch, syscall.SIGWINCH)
 	go func() {
@@ -258,7 +261,8 @@ func main() {
 					Row: newWs.Row - 1,
 					Col: newWs.Col,
 				})
-				setScrollRegion(currentRows)
+				// Redraw the status bar at the new last row position.
+				drawStatus(currentRows, getStatus())
 				mu.Unlock()
 				if cmd.Process != nil {
 					cmd.Process.Signal(syscall.SIGWINCH)
