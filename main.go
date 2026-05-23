@@ -243,8 +243,9 @@ func writeOutput(b []byte, rows int) {
 
 	if hasReset || altExit {
 		setScrollRegion(rows)
-		drawStatus(rows, getStatus())
+		// drawStatus(rows, getStatus())
 	}
+	drawStatus(rows, getStatus())
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
