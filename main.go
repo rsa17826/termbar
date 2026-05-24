@@ -123,6 +123,9 @@ var (
 	inAltScreen bool
 	currentRows int
 	statusFile  string
+	// carry holds a trailing incomplete escape sequence from the previous
+	// filterDECSTBM call so sequences split across buffer boundaries are caught.
+	carry []byte
 )
 
 // ── Status bar ────────────────────────────────────────────────────────────────
@@ -178,28 +181,46 @@ func rewriteDECSTBM(params string, rows int) string {
 
 // filterDECSTBM scans b for CSI DECSTBM sequences (\033[...r) and rewrites
 // them so the bottom margin never reaches our reserved last row.
-// This prevents apps (including zsh's SIGWINCH handler) from reclaiming it.
+// A carry buffer handles sequences that are split across successive reads.
+// Caller must hold mu.
 func filterDECSTBM(b []byte, rows int) []byte {
+	// Prepend any incomplete sequence left over from the previous call.
+	if len(carry) > 0 {
+		b = append(carry, b...)
+		carry = nil
+	}
 	if !bytes.ContainsRune(b, 0x1b) {
 		return b
 	}
 	out := make([]byte, 0, len(b))
 	for i := 0; i < len(b); {
-		if b[i] != 0x1b || i+1 >= len(b) || b[i+1] != '[' {
+		if b[i] != 0x1b {
 			out = append(out, b[i])
 			i++
 			continue
 		}
+		// ESC at end of buffer: save and wait for next read.
+		if i+1 >= len(b) {
+			carry = []byte{0x1b}
+			break
+		}
+		if b[i+1] != '[' {
+			out = append(out, b[i])
+			i++
+			continue
+		}
+		// ESC [ found — scan parameter bytes.
 		j := i + 2
 		for j < len(b) && (b[j] == ';' || (b[j] >= '0' && b[j] <= '9')) {
 			j++
 		}
 		if j >= len(b) {
-			// Incomplete sequence — pass through.
-			out = append(out, b[i:]...)
+			// Incomplete CSI sequence — carry it to the next read.
+			carry = append([]byte{}, b[i:]...)
 			break
 		}
 		if b[j] == 'r' {
+			// DECSTBM — rewrite bottom margin.
 			params := string(b[i+2 : j])
 			out = append(out, '\033', '[')
 			out = append(out, []byte(rewriteDECSTBM(params, rows))...)

@@ -7,7 +7,7 @@ TIMER_START_FILE="/tmp/termbar_timer_start_${USER}_$$.txt"
 
 # Write to the termbar status file (no-op if not running under termbar)
 function _set_status() {
-  [[ -n "$TERMBAR_STATUS_FILE" ]] && echo "$1" >| "$TERMBAR_STATUS_FILE"
+  [[ -n "$TERMBAR_STATUS_FILE" ]] && echo "$1" >|"$TERMBAR_STATUS_FILE"
 }
 
 [[ -n "$TERMBAR_ENABLED" ]] && _set_status "0s 000ms"
@@ -37,7 +37,7 @@ function preexec() {
   local start_time=$EPOCHREALTIME
   local parent_pid=$$
 
-  echo "$start_time" >| "$TIMER_START_FILE"
+  echo "$start_time" >|"$TIMER_START_FILE"
   unsetopt MONITOR 2>/dev/null
 
   (
@@ -53,7 +53,7 @@ function preexec() {
     done
   ) >/dev/null 2>&1 &|
 
-  echo $! >| "$TIMER_PID_FILE"
+  echo $! >|"$TIMER_PID_FILE"
   setopt MONITOR 2>/dev/null
 }
 
@@ -68,13 +68,28 @@ function zsh-timer-exit-cleanup() {
 add-zsh-hook zshexit zsh-timer-exit-cleanup
 
 function precmd() {
+  # Capture pipestatus immediately — it's overwritten by the next command.
+  local -a _codes=("${pipestatus[@]}")
   local exact_end_time=$EPOCHREALTIME
+
+  # Build exit code string: omit entirely if all zero, else e.g. "1,0,1"
+  local code_str=""
+  local all_ok=true
+  for c in "${_codes[@]}"; do
+    [[ $c -ne 0 ]] && all_ok=false
+    code_str+="${code_str:+,}$c"
+  done
 
   if [[ -s "$TIMER_START_FILE" && -n "$TERMBAR_ENABLED" ]]; then
     local start_time=$(cat "$TIMER_START_FILE" 2>/dev/null)
     if [[ -n "$start_time" ]]; then
       local delta=$(awk "BEGIN {print $exact_end_time - $start_time}")
-      _set_status "$(format_duration "$delta")"
+      local time_str="$(format_duration "$delta")"
+      if $all_ok; then
+        _set_status "$time_str"
+      else
+        _set_status "[$code_str] $time_str"
+      fi
     fi
     rm -f "$TIMER_START_FILE"
   fi
