@@ -337,20 +337,35 @@ func main() {
 	// redraw the status bar — we do NOT re-issue DECSTBM because setting the
 	// scroll region again causes kitty to clear scrollback history.
 	// The child being rows-1 tall is sufficient to keep it out of our last row.
+	// Forward SIGWINCH to child and re-lock the scroll region.
 	winch := make(chan os.Signal, 1)
 	signal.Notify(winch, syscall.SIGWINCH)
 	go func() {
 		for range winch {
 			if newWs, err := getWinsize(os.Stdin.Fd()); err == nil {
 				mu.Lock()
+
+				// 1. Update our tracker
 				currentRows = int(newWs.Row)
+
+				// 2. Tell the child process it has one fewer row
 				setWinsize(master.Fd(), &Winsize{
 					Row: newWs.Row - 1,
 					Col: newWs.Col,
 				})
-				// Redraw the status bar at the new last row position.
+
+				// 3. FIX: Re-assert the scroll region on the actual host terminal,
+				// since the terminal emulator resets it to full screen on resize.
+				if !inAltScreen {
+					setScrollRegion(currentRows)
+				}
+
+				// 4. Redraw the status bar at the new bottom row
 				drawStatus(currentRows, getStatus())
+
 				mu.Unlock()
+
+				// 5. Notify the child shell to redraw its prompt
 				if cmd.Process != nil {
 					cmd.Process.Signal(syscall.SIGWINCH)
 				}
