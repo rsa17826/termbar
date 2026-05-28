@@ -354,10 +354,12 @@ func main() {
 					Col: newWs.Col,
 				})
 
-				// 3. FIX: Re-assert the scroll region on the actual host terminal,
-				// since the terminal emulator resets it to full screen on resize.
+				// 3. Re-assert the scroll region safely
 				if !inAltScreen {
-					setScrollRegion(currentRows)
+					// \033[s  - Save cursor position
+					// \033[...r - Set scroll region (which warps cursor to top-left)
+					// \033[u  - Restore cursor back to where it belongs
+					fmt.Fprintf(os.Stdout, "\033[s\033[1;%dr\033[u", currentRows-1)
 				}
 
 				// 4. Redraw the status bar at the new bottom row
@@ -365,7 +367,7 @@ func main() {
 
 				mu.Unlock()
 
-				// 5. Notify the child shell to redraw its prompt
+				// 5. Notify the child shell/command to redraw its UI
 				if cmd.Process != nil {
 					cmd.Process.Signal(syscall.SIGWINCH)
 				}
