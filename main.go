@@ -144,14 +144,17 @@ func setScrollRegion(rows int) {
 	fmt.Fprintf(os.Stdout, "\033[1;%dr", rows-1)
 }
 
-// drawStatus saves cursor, jumps to the last row (outside the scroll region),
-// writes status, then restores cursor. Caller must hold mu.
+// drawStatus saves cursor (DEC \0337), jumps to the last row (outside the
+// scroll region), writes status, then restores cursor (DEC \0338).
+// DEC save/restore uses a register distinct from ANSI \033[s/\033[u, so it
+// does not clobber saves made by applications like vim or less. Caller must
+// hold mu.
 func drawStatus(rows int, status string) {
 	if inAltScreen {
 		return
 	}
 	fmt.Fprintf(os.Stdout,
-		"\033[s\033[%d;1H\033[2K\033[33m%s\033[0m\033[u",
+		"\0337\033[%d;1H\033[2K\033[33m%s\033[0m\0338",
 		rows, status,
 	)
 }
@@ -177,6 +180,17 @@ func rewriteDECSTBM(params string, rows int) string {
 		bottom = rows - 1
 	}
 	return fmt.Sprintf("%d;%d", top, bottom)
+}
+
+// isPlainDecstbm reports whether params contains only digits and semicolons,
+// i.e. it is a standard DECSTBM with no private-mode prefix such as '?'.
+func isPlainDecstbm(params string) bool {
+	for i := 0; i < len(params); i++ {
+		if params[i] != ';' && (params[i] < '0' || params[i] > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // filterDECSTBM scans b for CSI DECSTBM sequences (\033[...r) and rewrites
@@ -209,9 +223,16 @@ func filterDECSTBM(b []byte, rows int) []byte {
 			i++
 			continue
 		}
-		// ESC [ found — scan parameter bytes.
+		// ESC [ found — scan the full CSI sequence.
+		// Parameter bytes span 0x30-0x3F: digits, ';', and private-mode
+		// markers '?', '<', '=', '>'. Scanning them all ensures sequences
+		// like \033[?25h are never split mid-sequence at a buffer boundary.
 		j := i + 2
-		for j < len(b) && (b[j] == ';' || (b[j] >= '0' && b[j] <= '9')) {
+		for j < len(b) && b[j] >= 0x30 && b[j] <= 0x3F {
+			j++
+		}
+		// Intermediate bytes (0x20-0x2F) follow parameters in some sequences.
+		for j < len(b) && b[j] >= 0x20 && b[j] <= 0x2F {
 			j++
 		}
 		if j >= len(b) {
@@ -220,13 +241,16 @@ func filterDECSTBM(b []byte, rows int) []byte {
 			break
 		}
 		if b[j] == 'r' {
-			// DECSTBM — rewrite bottom margin.
+			// DECSTBM — rewrite bottom margin, but only for plain sequences
+			// (digits and semicolons only; skip private-mode forms like \033[?...r).
 			params := string(b[i+2 : j])
-			out = append(out, '\033', '[')
-			out = append(out, []byte(rewriteDECSTBM(params, rows))...)
-			out = append(out, 'r')
-			i = j + 1
-			continue
+			if isPlainDecstbm(params) {
+				out = append(out, '\033', '[')
+				out = append(out, []byte(rewriteDECSTBM(params, rows))...)
+				out = append(out, 'r')
+				i = j + 1
+				continue
+			}
 		}
 		// Other CSI sequence — pass through unchanged.
 		out = append(out, b[i:j+1]...)
@@ -356,10 +380,10 @@ func main() {
 
 				// 3. Re-assert the scroll region safely
 				if !inAltScreen {
-					// \033[s  - Save cursor position
-					// \033[...r - Set scroll region (which warps cursor to top-left)
-					// \033[u  - Restore cursor back to where it belongs
-					fmt.Fprintf(os.Stdout, "\033[s\033[1;%dr\033[u", currentRows-1)
+					// \0337  - DEC save cursor position
+					// \033[...r - Set scroll region
+					// \0338  - DEC restore cursor back to where it belongs
+					fmt.Fprintf(os.Stdout, "\0337\033[1;%dr\0338", currentRows-1)
 				}
 
 				// 4. Redraw the status bar at the new bottom row
