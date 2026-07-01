@@ -377,10 +377,14 @@ func main() {
 
 				// 3. Re-assert the scroll region safely
 				if !inAltScreen {
-					// \033[s  - Save cursor position
-					// \033[...r - Set scroll region (which warps cursor to top-left)
-					// \033[u  - Restore cursor back to where it belongs
-					fmt.Fprintf(os.Stdout, "\033[s\033[1;%dr\033[u", currentRows-1)
+					// Set the new scroll region, then explicitly place the cursor on its
+					// last row (one line above the reserved status row). We deliberately
+					// don't save/restore the pre-resize cursor position here: terminals
+					// often clip the cursor into the new bounds as part of their own
+					// resize handling before we ever see SIGWINCH, so the "saved" position
+					// can already be the bar row itself, causing a save→restore round trip
+					// right back into the bar.
+					fmt.Fprintf(os.Stdout, "\033[1;%dr\033[%d;1H", currentRows-1, currentRows-1)
 				}
 
 				// 4. Redraw the status bar at the new bottom row
